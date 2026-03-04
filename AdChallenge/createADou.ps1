@@ -8,7 +8,7 @@ $GroupName = "London Users"
 #Create an OU only if ti does not already exist
 if (-not (Get-ADOrganizationalUnit -Filter { DistinguishedName -eq $OUPath } )) {
     # Create the OU
-    New-ADOrganizationalUnit -Name $OUName -Path $DomainDN -ProtectedFromAccidentalDeletion $true
+    New-ADOrganizationalUnit -Name $OUName -Path $DomainDN -ProtectedFromAccidentalDeletion $false
     Write-Output "Organizational Unit '$OUName' has been successfully created."
 }
 else {
@@ -30,7 +30,7 @@ else {
 #PART 3 and 4
 # Find all users whose City property is 'London' in the OU of your choice, 
 # move them to the new OU, and add them to the group
-$OUtoSearch = (Read-Host Enter the OU that you want to search for users)
+$OUtoSearch = (Read-Host "Enter the OU that you want to search for users")
 $SearchBase = "OU=$($OUtoSearch),$($DomainDN)"
 $Users = Get-ADUser -Filter { City -eq "London" } -Properties City, DistinguishedName -searchBase $SearchBase
 
