@@ -28,9 +28,11 @@ else {
 
 
 #PART 3 and 4
-# Find all users whose City property is 'London' in the Sale OU, 
+# Find all users whose City property is 'London' in the OU of your choice, 
 # move them to the new OU, and add them to the group
-$Users = Get-ADUser -Filter { City -eq "London" } -Properties City, DistinguishedName -searchBase "OU=Sales,$DomainDN"
+$OUtoSearch = (Read-Host Enter the OU that you want to search for users)
+$SearchBase = "OU=$($OUtoSearch),$($DomainDN)"
+$Users = Get-ADUser -Filter { City -eq "London" } -Properties City, DistinguishedName -searchBase $SearchBase
 
 # Move users to the new "London" OU and add them to "London Users" group
 foreach ($User in $Users) {
