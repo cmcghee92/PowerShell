@@ -1,8 +1,16 @@
+[CmdletBinding(SupportsShouldProcess = $true)]
+param(
+    [switch]$WhatIf
+)
+
 Import-Module ActiveDirectory
-#Enable Active directory recycle bin
-Enable-ADOptionalFeature -Identity 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target 'Adatum.com' -Confirm:$false
-#Restore deleted objects
-Get-ADObject -Filter 'isDeleted -eq $true' -IncludeDeletedObjects -Property * | Restore-ADObject
+# Enable Active Directory recycle bin
+Enable-ADOptionalFeature -Identity 'Recycle Bin Feature' -Scope ForestOrConfigurationSet -Target 'Adatum.com' -Confirm:$false -WhatIf:$WhatIf
+# Optional: restore deleted objects only when explicitly enabled
+$RestoreDeletedObjects = $false
+if ($RestoreDeletedObjects) {
+    Get-ADObject -Filter "isDeleted -eq '$true'" -IncludeDeletedObjects -Property * | Restore-ADObject -WhatIf:$WhatIf
+}
 
 
 # Define the Organizational Unit (OU) and Group Name
@@ -21,9 +29,10 @@ try {
 
     #PART 1
     # Check if the London OU already exists and if it doesn't, create it
-    if (-not (Get-ADOrganizationalUnit -Filter { DistinguishedName -eq $OUPath } -ErrorAction SilentlyContinue)) {
+    $existingOu = Get-ADOrganizationalUnit -Identity $OUPath -ErrorAction SilentlyContinue
+    if (-not $existingOu) {
         # Create the OU
-        New-ADOrganizationalUnit -Name $OUName -Path $DomainDN -ProtectedFromAccidentalDeletion $true
+        New-ADOrganizationalUnit -Name $OUName -Path $DomainDN -ProtectedFromAccidentalDeletion $true -WhatIf:$WhatIf
         $ouCreated = $true
         Write-Output "Organizational Unit '$OUName' has been successfully created."
     }
@@ -33,22 +42,28 @@ try {
 
     #PART 2
     # Check if the group already exists and create London Users group
-    if (-not (Get-ADGroup -Filter { Name -eq $GroupName })) {
+    $existingGroup = Get-ADGroup -Identity $GroupName -ErrorAction SilentlyContinue
+    if (-not $existingGroup) {
         # Create the Global Security Group inside the OU
-        New-ADGroup -Name $GroupName -GroupScope Global -GroupCategory Security -Path $OUPath
+        New-ADGroup -Name $GroupName -GroupScope Global -GroupCategory Security -Path $OUPath -WhatIf:$WhatIf
         $groupCreated = $true
+        $existingGroup = Get-ADGroup -Identity $GroupName -ErrorAction Stop
         Write-Output "Group '$GroupName' has been successfully created in '$OUPath'."
     }
     else {
         Write-Output "Group '$GroupName' already exists."
     }
+    $GroupDN = $existingGroup.DistinguishedName
 
 
 #PART 3
 # Find all users whose City property is 'London' and move them to the new OU and add them to the group
 $OUtoSearch = (Read-Host "Enter the OU that you want to search for users")
 $SearchBase = "OU=$($OUtoSearch),$($DomainDN)"
-$Users = Get-ADUser -Filter { City -eq "London" } -Properties City, DistinguishedName -searchBase $SearchBase
+if (-not (Get-ADOrganizationalUnit -Identity $SearchBase -ErrorAction SilentlyContinue)) {
+    throw "Search base '$SearchBase' does not exist."
+}
+$Users = Get-ADUser -Filter "City -eq 'London'" -Properties City, DistinguishedName -SearchBase $SearchBase
 
     # Move users to the new "London" OU and add them to "London Users" group
     foreach ($User in $Users) {
@@ -57,8 +72,9 @@ $Users = Get-ADUser -Filter { City -eq "London" } -Properties City, Distinguishe
         $originalParentDN = $entry.Parent -replace '^LDAP://', ''
 
         # Move the user to the London OU
-        Move-ADObject -Identity $UserDN -TargetPath $OUPath
+        Move-ADObject -Identity $UserDN -TargetPath $OUPath -WhatIf:$WhatIf
         $movedUsers += [pscustomobject]@{
+            DistinguishedName = $UserDN
             SamAccountName = $User.SamAccountName
             OriginalParentDN = $originalParentDN
         }
@@ -67,7 +83,7 @@ $Users = Get-ADUser -Filter { City -eq "London" } -Properties City, Distinguishe
         # Add the user to the "London Users" security group if not already a member
         $userGroupDns = (Get-ADUser -Identity $User.SamAccountName -Properties MemberOf).MemberOf
         if (-not ($userGroupDns -contains $GroupDN)) {
-            Add-ADGroupMember -Identity $GroupName -Members $User.SamAccountName
+            Add-ADGroupMember -Identity $GroupName -Members $User.SamAccountName -WhatIf:$WhatIf
             $addedMembers += $User.SamAccountName
             Write-Output "Added user '$($User.SamAccountName)' to group '$GroupName'."
         }
@@ -83,7 +99,7 @@ catch {
 
     foreach ($member in $addedMembers) {
         try {
-            Remove-ADGroupMember -Identity $GroupName -Members $member -Confirm:$false -ErrorAction Stop
+            Remove-ADGroupMember -Identity $GroupName -Members $member -Confirm:$false -ErrorAction Stop -WhatIf:$WhatIf
             Write-Output "Rollback: removed '$member' from group '$GroupName'."
         }
         catch {
@@ -93,7 +109,7 @@ catch {
 
     foreach ($moved in ($movedUsers | Select-Object -Last $movedUsers.Count)) {
         try {
-            Move-ADObject -Identity $moved.SamAccountName -TargetPath $moved.OriginalParentDN -ErrorAction Stop
+            Move-ADObject -Identity $moved.DistinguishedName -TargetPath $moved.OriginalParentDN -ErrorAction Stop -WhatIf:$WhatIf
             Write-Output "Rollback: moved '$($moved.SamAccountName)' back to '$($moved.OriginalParentDN)'."
         }
         catch {
@@ -103,7 +119,7 @@ catch {
 
     if ($groupCreated) {
         try {
-            Remove-ADGroup -Identity $GroupName -Confirm:$false -ErrorAction Stop
+            Remove-ADGroup -Identity $GroupName -Confirm:$false -ErrorAction Stop -WhatIf:$WhatIf
             Write-Output "Rollback: removed group '$GroupName'."
         }
         catch {
@@ -113,8 +129,8 @@ catch {
 
     if ($ouCreated) {
         try {
-            Set-ADOrganizationalUnit -Identity $OUPath -ProtectedFromAccidentalDeletion $false -ErrorAction Stop
-            Remove-ADOrganizationalUnit -Identity $OUPath -Recursive -Confirm:$false -ErrorAction Stop
+            Set-ADOrganizationalUnit -Identity $OUPath -ProtectedFromAccidentalDeletion $false -ErrorAction Stop -WhatIf:$WhatIf
+            Remove-ADOrganizationalUnit -Identity $OUPath -Recursive -Confirm:$false -ErrorAction Stop -WhatIf:$WhatIf
             Write-Output "Rollback: removed OU '$OUName'."
         }
         catch {
